@@ -3,7 +3,7 @@
   <PropertyGroup>
     <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
     <SchemaVersion>2.0</SchemaVersion>
-    <ProjectGuid>{e8eaa908-8f7d-44dc-b138-a74f0c5bee53}</ProjectGuid>
+    <ProjectGuid>{7a05c205-999f-4343-83ea-193dc2cc131c}</ProjectGuid>
     <ProjectHome />
     <StartupFile>main.py</StartupFile>
     <SearchPath />
@@ -11,7 +11,7 @@
     <OutputPath>.</OutputPath>
     <ProjectTypeGuids>{888888a0-9f3d-457c-b088-3a5042f75d52}</ProjectTypeGuids>
     <LaunchProvider>Standard Python launcher</LaunchProvider>
-    <InterpreterId>CondaEnv|CondaEnv|exp_cyclegan</InterpreterId>
+    <InterpreterId />
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)' == 'Debug'" />
   <PropertyGroup Condition="'$(Configuration)' == 'Release'" />
@@ -24,9 +24,6 @@
     <Compile Include="module.py" />
     <Compile Include="ops.py" />
     <Compile Include="utils.py" />
-  </ItemGroup>
-  <ItemGroup>
-    <InterpreterReference Include="CondaEnv|CondaEnv|exp_cyclegan" />
   </ItemGroup>
   <Import Project="$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)\Python Tools\Microsoft.PythonTools.targets" />
 </Project>

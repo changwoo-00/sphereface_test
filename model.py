@@ -6,7 +6,7 @@ import tensorflow as tf
 import numpy as np
 import pandas as pd
 from collections import namedtuple
-
+import random
 from module import *
 from utils import *
 import utils
@@ -22,99 +22,82 @@ class vae(object):
         self.dataset_dir = args.dataset_dir
         self.alpha = args.alpha
 
-        self.feature_extraction_network = feature_extraction_network
-        self.prediction_network = prediction_network
-        self.recognition_network = recognition_network
-        self.reconstruction_network = reconstruction_network
-        self.mse = mse_criterion
+        self.network = network
+        self.Angular_Softmax_Loss = Angular_Softmax_Loss
 
         self._build_model(args)
         
         self.saver = tf.train.Saver(max_to_keep=100)
         
-        #utils._load_data_and_split('./dataset/rcwa_data_0608/rcwa_data_0608.csv', 0.7)_0.8
-        #print()
         if args.phase == 'train':
-            self.ds = pd.read_csv('./dataset/rcwa_data_0608/rcwa_data_0608_0.7_train.csv')
-        else:
-            self.ds = pd.read_csv('./dataset/rcwa_data_0608/rcwa_data_0608_0.7_test.csv')
+            self.ds, self.other = self._load_dataset('D:/Dataset/CAM11_12_NEW_for_cutmix/')
+            
         
+    def _load_dataset(self, path):
+        class_name_list = {'fanout':0,'impedance':1}
+        #class_name_list = {'fanout':0,'impedance':1, 'others':2}
+        class_list = os.listdir(path)
+        img_list = []
+        label_list = []
+        other_list = []
+        rand_label_list = []
+        for i in range(len(class_list)):
+            if class_list[i] in class_name_list:
+                class_path = path+class_list[i]
+                temp_img_list = [class_path + '/' + j for j in os.listdir(class_path)]
+                temp_label_list = list(np.zeros(len(temp_img_list)) + class_name_list[class_list[i]])
+                img_list.extend(temp_img_list)
+                label_list.extend(temp_label_list)
+            else:
+                temp_other_list = [class_path + '/' + j for j in os.listdir(class_path)]
+                temp_rand_label_list = np.random.randint(0,2,len(temp_other_list))
+                other_list.extend(temp_other_list)
+                rand_label_list.extend(temp_rand_label_list)
+
+        print(np.shape(img_list))
+        print(np.shape(label_list))
+        data_list = list(zip(img_list, label_list))
+        other_list = list(zip(other_list, rand_label_list))
+        random.shuffle(data_list)
+        random.shuffle(other_list)
+        return data_list, other_list
+
     def _load_batch(self, dataset, idx):
         
-        filename_list = dataset.iloc[:,0][idx * self.batch_size:(idx + 1) * self.batch_size].values.tolist()
+        filename_list = dataset[idx * self.batch_size:(idx + 1) * self.batch_size]
 
         # input batch (2d binary image)
         input_batch = []
+        target_batch = []
         for i in range(len(filename_list)):
-            temp_img = cv2.imread('./dataset/rcwa_data_0608/64/'+filename_list[i], 0)
+            temp_img = cv2.imread(filename_list[i][0], 0)
             temp_img = temp_img/128 - 1
-            input_batch.append(list(temp_img))
-        input_batch = np.expand_dims(input_batch, axis=3)
+            #temp_img = tf.dtypes.cast(temp_img, tf.float32)
+            input_batch.append(temp_img)
+            temp_target = filename_list[i][1]
+            #temp_target = tf.dtypes.cast(temp_target, tf.int64)
+            target_batch.append(temp_target)
+        
 
-        # target batch (spectrum)
-        target_batch = np.expand_dims(dataset.iloc[:,6:][idx * self.batch_size:(idx + 1) * self.batch_size].values.tolist(), 2) # [0.543, ... ] 226개
-        target_batch = target_batch/180
+        input_batch = np.array(input_batch, dtype=np.float32)
+        target_batch = np.array(target_batch, dtype=np.int64)
+        input_batch = np.expand_dims(input_batch, axis=3)
 
         return input_batch, target_batch, filename_list
 
 
     def _build_model(self, args):
-        # ref : https://github.com/hwalsuklee/tensorflow-mnist-VAE/blob/master/vae.py
-        # log sigma ref : https://wiseodd.github.io/techblog/2016/12/10/variational-autoencoder/
 
 
-        self.geo_labeled = tf.placeholder(tf.float32, [None, 64, 64, 1], name='input_l')
-        #self.geo_unlabeled = tf.placeholder(tf.float32, [None, 64, 64, 1], name='input_u')
-        self.spectrum_target = tf.placeholder(tf.float32, [None, 202, 1], name='spectra_target')
-        self.latent_vector = tf.placeholder(tf.float32, [None, args.latent_dims], name='latent_vector')
-
+        self.input = tf.placeholder(tf.float32, [None, 128, 128, 1], name='input')
+        self.label = tf.placeholder(tf.int64, [None,], name='label')
 
         # labeled data sequence
-        feature_l = self.feature_extraction_network(self.geo_labeled, reuse=False)
-        self.spectra_l_predicted = self.prediction_network(feature_l, reuse=False)
-        mu, log_sigma = self.recognition_network(feature_l, self.spectrum_target, args.latent_dims, reuse=False)
-        self.latent_variable_a = mu + tf.exp(log_sigma/2) * tf.random_normal(tf.shape(mu), 0, 1, dtype=tf.float32)
-        self.geo_reconstructed_l = self.reconstruction_network(self.spectrum_target, self.latent_variable_a, reuse=False)
+        self.embeddings = self.network(self.input)
+        self.pred_prob, self.loss, self.cos_theta, self.orgina_logits = Angular_Softmax_Loss(self.embeddings, self.label)
 
-        # reconstruction (inverse generation) model
-        self.geo_reconstructed = self.reconstruction_network(self.spectrum_target, self.latent_vector, reuse=True)
-
-        ## unlabeled data sequence (사용 안함)
-        #feature_u = self.feature_extraction_network(self.geo_unlabeled, reuse=True)
-        #spectra_u = self.prediction_network(feature_u, reuse=True)
-        #mean_u, covariance_u = self.recognition_network(feature_u, spectra_u, reuse=True)
-        #latent_variable_b = mean_u + covariance_u * tf.random_normal(tf.shape(mean_u), 0, 1, dtype=tf.float32)
-        #geo_reconstructed_u = self.reconstruction_network(spectra_u, latent_variable_b, reuse=True)
         
-
-        # Labeled data loss
-        # KL div loss
-        self.KL_div_loss = 0.5 * tf.reduce_sum(tf.square(mu) + tf.exp(log_sigma) - log_sigma - 1., 1)
-        # reconstruction loss ( tf.nn.sigmoid ... =  z * -log(sigmoid(x)) + (1 - z) * -log(1 - sigmoid(x)) <- "negative log")
-        self.reconstruction_loss = tf.nn.sigmoid_cross_entropy_with_logits(labels=tf.reshape(self.geo_labeled,[self.batch_size,64*64]),
-                                                                    logits=tf.reshape(self.geo_reconstructed_l,[self.batch_size,64*64]))
-        #self.marginal_likelihood_l = self.mse(self.geo_labeled, self.geo_reconstructed_l)
-        
-        self.loss_l = args.beta*tf.reduce_mean(self.KL_div_loss) + tf.reduce_mean(self.reconstruction_loss)
-
-
-        ## Unlabeled data loss (검토 필요)
-        #KL_div_u = 0.5 * tf.reduce_sum(tf.square(mean_u) + tf.square(covariance_u) - tf.log(1e-8 + tf.square(covariance_u)) - 1, 1)
-        ##marginal_likelihood_u = tf.nn.sigmoid_cross_entropy_with_logits(labels=tf.reshape(self.geo_unlabeled,[self.batch_size,32*32]),
-        ##                                                            logits=tf.reshape(geo_reconstructed_u,[self.batch_size,32*32]))
-        #marginal_likelihood_u = tf.reduce_sum(self.geo_unlabeled * tf.log(1e-10+geo_reconstructed_u) + (1 - self.geo_unlabeled) * tf.log(1e-10+1 - geo_reconstructed_u), 1)
-        #self.loss_u = tf.reduce_mean(KL_div_u) - tf.reduce_mean(marginal_likelihood_u)
-
-        # Regression loss
-        self.loss_r = self.alpha * self.mse(self.spectra_l_predicted, self.spectrum_target)
-
-        # Total loss
-        #self.total_loss = self.loss_l + self.loss_u + self.loss_r
-        self.total_loss = self.loss_l + self.loss_r
-
-
-
-        self.loss_summary = tf.summary.scalar("loss", self.total_loss)
+        self.loss_summary = tf.summary.scalar("loss", self.loss)
 
         self.t_vars = tf.trainable_variables()
         print("trainable variables : ")
@@ -123,15 +106,11 @@ class vae(object):
 
     def train(self, args):
         
-        self.lr = tf.placeholder(tf.float32, None, name='learning_rate')
-        
-        global_step = tf.Variable(0, trainable=False)
-        learning_rate = tf.train.exponential_decay(self.lr, global_step, args.epoch_step, 0.96, staircase=False)
+        global_step = tf.Variable(0, trainable=False)        
+        decay_lr = tf.train.exponential_decay(args.lr, global_step, 500, 0.9)
+        optimizer = tf.train.AdamOptimizer(decay_lr)
+        train_op = optimizer.minimize(self.loss)
 
-        self.optim = tf.train.AdamOptimizer(learning_rate, beta1=args.beta1) \
-            .minimize(self.total_loss, var_list=self.t_vars, global_step = global_step)
-        #self.optim = tf.train.GradientDescentOptimizer(learning_rate) \
-        #    .minimize(self.total_loss, var_list=self.t_vars, global_step = global_step)
 
         print("initialize")
         init_op = tf.global_variables_initializer()
@@ -148,32 +127,48 @@ class vae(object):
                 print(" [!] Load failed...")
 
         for epoch in range(args.epoch):
+
+            random.shuffle(self.ds)
+            random.shuffle(self.other)
             
             batch_idxs = len(self.ds) // self.batch_size
 
-            ds_1 = self.ds.sample(frac=1)
+            #ds_1 = self.ds.sample(frac=1)
             
             for idx in range(0, batch_idxs):
 
-                input_batch, target_batch, _ = self._load_batch(ds_1, idx)
+                input_batch, target_batch, _ = self._load_batch(self.ds, idx)
+                
+
+                test_input_batch, test_target_batch, _ = self._load_batch(self.other, idx)
 
                 # Update network
-                kl, marginal, la_v, geo_re, _, loss, loss_l,loss_r, c_lr, summary_str = self.sess.run([self.KL_div_loss,self.reconstruction_loss, self.latent_variable_a, self.geo_reconstructed_l, self.optim, self.total_loss, self.loss_l, self.loss_r, learning_rate, self.loss_summary],
-                                                   feed_dict={self.geo_labeled: input_batch, self.spectrum_target: target_batch, self.lr: args.lr})
+                cos_theta, loss, _ = self.sess.run([self.cos_theta, self.loss, train_op], feed_dict={self.input: input_batch, self.label: target_batch})
 
-                self.writer.add_summary(summary_str, counter)
+                #self.writer.add_summary(summary_str, counter)
 
                 counter += 1
                 if idx%10==0:
-                    print(("Epoch: [%2d] [%4d/%4d] time: %4.4f loss: %4.4f loss_l: %4.4f loss_r: %4.4f lr: %4.7f kl: %4.7f m: %4.7f" % (
-                        epoch, idx, batch_idxs, time.time() - start_time, loss,loss_l,loss_r, c_lr, np.mean(kl), np.mean(marginal))))
+                    print(("Epoch: [%2d] [%4d/%4d] time: %4.4f loss: %4.4f cos(theta): %4.4f" % (
+                        #epoch, idx, batch_idxs, time.time() - start_time, loss, np.sum(cos_theta[0]))))
+                        epoch, idx, batch_idxs, time.time() - start_time, loss, cos_theta[0])))
+
+                if idx%100==0:
+                    print("OTHERS TEST")
+
+                    cos_theta_t, loss_t, origina_logits_t = self.sess.run([self.cos_theta, self.loss, self.orgina_logits], feed_dict={self.input: test_input_batch, self.label: test_target_batch})
+                    rand_int_t = int(np.random.randint(10))
+                    print(("Epoch: [%2d] [%4d/%4d] time: %4.4f loss: %4.4f cos(theta): %4.4f %4.4f" % (
+                        epoch, idx, batch_idxs, time.time() - start_time, loss_t, cos_theta_t[rand_int_t], test_target_batch[rand_int_t])))
+                    #epoch, idx, batch_idxs, time.time() - start_time, loss, np.sum(cos_theta_t[int(np.random.randint(10))]))))
+
+                    print(origina_logits_t)
+                    print(np.shape(origina_logits_t))
+                    print(rand_int_t)
 
                 if np.mod(counter, args.save_freq) == 20:
                     self.save(args.checkpoint_dir, counter)
 
-            if epoch%1 == 0: # save sample image
-                cv2.imwrite('./sample/epoch_'+str(epoch)+'_pred.bmp',(geo_re[0,:,:,0]+1)*128)
-                cv2.imwrite('./sample/epoch_'+str(epoch)+'_input.bmp',(input_batch[0,:,:,0]+1)*128)
 
     def save(self, checkpoint_dir, step):
         model_name = "dnn.model"
